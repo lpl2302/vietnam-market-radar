@@ -218,3 +218,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Market data
+data/raw/
+data/processed/
+
+# Environment variables and secrets
+.env
+.env.*
+
+# Trained ML models
+models/
+*.joblib
