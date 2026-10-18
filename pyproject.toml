@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vietnam-market-radar"
+version = "0.1.0"
+description = "Research unusual trading activity in Vietnamese stocks"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "numpy>=2.1,<3",
+    "pandas>=2.2,<3",
+    "scikit-learn>=1.6,<2",
+    "streamlit>=1.40,<2",
+    "plotly>=5.24,<7",
+    "vnstock==5.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

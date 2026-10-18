@@ -1,0 +1,3 @@
+# Vnstock Generation 5 is distributed through its own package index.
+--extra-index-url https://vnstocks.com/api/packages
+-e .[dev]

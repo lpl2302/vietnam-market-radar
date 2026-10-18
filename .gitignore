@@ -219,14 +219,23 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Market data
-data/raw/
-data/processed/
+# Market data (keep the empty directory placeholders)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/features/*
+!data/features/.gitkeep
 
 # Environment variables and secrets
 .env
 .env.*
+!.env.example
 
 # Trained ML models
 models/
 *.joblib
+artifacts/*
+!artifacts/.gitkeep
+*.pkl
+AGENTS.md
