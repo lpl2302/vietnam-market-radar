@@ -226,6 +226,10 @@ data/processed/*
 !data/processed/.gitkeep
 data/features/*
 !data/features/.gitkeep
+data/anomalies/*
+!data/anomalies/.gitkeep
+data/analysis/*
+!data/analysis/.gitkeep
 
 # Environment variables and secrets
 .env

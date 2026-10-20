@@ -2,7 +2,7 @@
 
 A Python project for researching unusual trading activity in Vietnamese stocks, with particular relevance to VietinBank Securities (VBSE). The planned workflow collects historical market data, prepares features, detects anomalies, compares results with statistical baselines, and presents findings in an interactive dashboard.
 
-**Current status:** Task 003 adds an offline financial feature table to the daily OHLCV pipeline. Model training and dashboards are future work.
+**Current status:** Task 006 adds covered-sector analysis, retrospective follow-up comparisons, model-only investigation, and Markdown research briefs to the offline dashboard.
 
 ## Planned capabilities
 
@@ -96,7 +96,7 @@ Each row retains `date`, `symbol`, `asset_type`, `sector`, original normalized O
 
 Returns and volatility are fractions: `0.01` means 1%. Columns ending in `_pct` are percentage values: `1.0` means 1%. Rolling windows use **prior trading observations**, never calendar-day resampling or day T in the comparison baseline. Day T's completed price and volume may appear in its own features. VNINDEX matches on the exact date; missing benchmark sessions are not forward-filled. These rules prevent future observations from affecting earlier feature rows.
 
-Early rows lack sufficient history, and ratios or z-scores with a zero historical denominator are undefined. They remain blank (`NaN`) in the CSV. No extreme observations are removed, and no missing trading days are invented. `model_ready` is true only when all ten numerical features are present and finite; Task 004 can select those rows before fitting its own scaler or model. The guest-tier one-year equity history limits the number of ready rows. Corporate actions, provider revisions, or unadjusted price discontinuities may produce unusually large returns that need interpretation before being called anomalies.
+Early rows lack sufficient history, and ratios or z-scores with a zero historical denominator are undefined. They remain blank (`NaN`) in the CSV. No extreme observations are removed, and no missing trading days are invented. `model_ready` is true only when all ten numerical features are present and finite; the detector selects only those rows for fitting and scoring. The guest-tier one-year equity history limits the number of ready rows. Corporate actions, provider revisions, or unadjusted price discontinuities may produce unusually large returns that need interpretation before being called anomalies.
 
 Inspect the generated table with:
 
@@ -105,14 +105,83 @@ head -n 5 data/features/market_features.csv
 python -c "import pandas as pd; d = pd.read_csv('data/features/market_features.csv'); print(d.groupby('symbol')['model_ready'].agg(['size', 'sum']))"
 ```
 
+## Detect unusual trading sessions offline
+
+Run the pooled Isolation Forest after building the feature table; this command makes **no network requests**:
+
+```sh
+python -m market_radar.detect_anomalies
+python -m market_radar.detect_anomalies --n-estimators 300 --contamination 0.05 --random-state 42
+```
+
+The model uses exactly the ten numerical features in the table above. One `StandardScaler` and one `IsolationForest` are fitted across all stocks. Default settings are 200 trees, expected training contamination 0.05, seed 42, and `n_jobs=-1`. Stock and sector identify rows but are not predictors. The scaler and model are saved together in a scikit-learn pipeline.
+
+The earliest 70% of **unique model-ready trading dates** form the training set; the latest 30% form a single chronological holdout. All stocks on one date stay in the same partition, even if their individual histories differ. Preprocessing and the Isolation Forest boundary are fitted on training rows only. Both partitions are scored, with `train` meaning in-sample and `holdout` meaning out-of-sample. The holdout does not choose settings or thresholds. This is one holdout assessment, not a walk-forward backtest.
+
+`anomaly_score` is the negative of scikit-learn's `decision_function`: larger values are more unusual, and positive values cross the fitted anomaly boundary. `anomaly_flag` comes directly from `predict == -1`. Contamination is an expected training fraction; the holdout fraction can differ. Non-ready rows remain in the result with `scoring_status=insufficient_features`, `partition=not_model_ready`, and missing predictions. Flagged rows receive deterministic **heuristic context** drawn from observed return, relative performance, intraday range, and volume. These sentences describe the data; they are neither Isolation Forest feature attribution nor a causal explanation.
+
+The output files are:
+
+| Path | Purpose |
+| --- | --- |
+| `artifacts/isolation_forest.joblib` | Fitted scaler and model; load only locally trusted joblib files |
+| `artifacts/isolation_forest.meta.json` | Ordered feature names, settings, dates, sample counts, versions, hashes, and creation time |
+| `data/anomalies/market_anomalies.csv` | OHLCV, features, partitions, scores, flags, baselines, and explanations for future dashboard use |
+| `data/anomalies/evaluation.json` | Descriptive rates, score distribution, baseline overlap, top events, and retrospective event study |
+| `data/anomalies/market_anomalies.meta.json` | Result provenance and model/source hashes |
+
+These generated files are ignored by Git. The CLI accepts `--input`, `--artifact-dir`, and `--output-dir` for offline experiments. Inference code checks the saved feature order and applies the fitted pipeline. The input CSV and model metadata carry SHA-256 hashes; reruns with the same input and seed should produce the same scores and flags, though file creation times and package version changes can differ.
+
+The evaluation reports anomaly counts and rates overall, by stock and sector, and by training/holdout partition. It compares holdout flags to two fixed statistical baselines: volume z-score **above 3**, and absolute return z-score **above 3**. Their overlap and the number of model-only detections are diagnostic comparisons, not accuracy measures; there are no verified anomaly labels. A retrospective event study computes absolute close-to-close returns over the next five observed sessions **within each symbol** for eligible holdout rows. It excludes rows without a full five-session window, uses future prices only after scoring, and cannot establish predictive value, causality, or profitability.
+
+Unsupervised outliers can reflect genuine market events, normal volatility regimes, trading limits, corporate actions, or data-provider adjustments. A pooled model may flag some stocks more often because their volatility differs. Analysts should inspect OHLCV history, provider metadata, and public disclosures before interpreting any event. The output is for research support, not an automated trading signal or investment recommendation.
+
+## Explore the historical dashboard
+
+Generate the local inputs, then launch Streamlit from the repository root:
+
+```sh
+source .venv/bin/activate
+python -m market_radar.build_features
+python -m market_radar.detect_anomalies
+python -m market_radar.build_analysis
+streamlit run app.py
+```
+
+The app loads `data/features/market_features.csv`, `data/anomalies/market_anomalies.csv`, `data/anomalies/evaluation.json`, `artifacts/isolation_forest.meta.json`, and the generated `data/analysis/` tables. It works offline, does not deserialize the model, and never retrains or calls Vnstock. Missing, stale, or malformed outputs produce a regeneration message. Existing dashboard views remain usable when optional research analysis files need regeneration. Cached loading refreshes when an input file's size or modification time changes. Prices and statistics are **historical**, with the latest available dataset session shown in the interface.
+
+The five navigation views are:
+
+- **Market Overview:** eligible sessions, anomaly counts and rates, stock and sector comparisons with both counts and eligible-session rates, monthly frequency, score distribution, train/holdout comparison, and a sortable ranked table.
+- **Stock Explorer:** stock and date selection, filtered stock statistics, historical closing prices and volume, correctly dated anomaly markers, and selected-event details.
+- **Sector Intelligence:** covered-stock summaries, a sector-by-month anomaly-rate heatmap, a count/rate comparison switch, partition-aware activity timeline, stock drilldowns, normalized price comparisons, and focused GAS/VHM source-data review.
+- **Anomaly Investigation:** stock, sector, date, partition, score, and model-only filters; ranked event table; selected-event price and volume context; later observed returns; and a deterministic Markdown research brief download. Holdout events appear by default; choose a flagged session to open its details. Changing the filtered cohort clears the selection.
+- **Model & Methodology:** saved configuration and feature order, chronological split, score interpretation, fixed z-score baseline overlap, and retrospective holdout event-study comparisons.
+
+Use the navigation and filters to choose an event; hover over price and volume charts for exact values. Reset buttons restore the explorer or investigation filters. Filtered event tables can be downloaded as CSV. To capture portfolio screenshots, run the app locally, open the Streamlit URL shown in the terminal, select each view, and use your browser's screenshot tool. Generated datasets and model artifacts remain excluded from Git; screenshots should avoid publishing proprietary market data beyond its permitted use.
+
+The dashboard's stock close values are in **thousands of VND per share**, volume is in **shares**, returns shown in cards are **percentages**, and market-relative performance is in **percentage points**. Anomaly scores are signed decision values, not probabilities. Training observations were used to fit the model; holdout observations were scored by that fitted model. Rates exclude rows without complete model features. The historical coverage is constrained by local Vnstock access and source revisions; apparent outliers require human inspection. Neither flagged events nor model-only events establish manipulation, expected returns, or investment merit.
+
+### Reproduce the research analysis
+
+After anomaly detection, run `python -m market_radar.build_analysis`. This reads existing validated local files and writes ignored outputs under `data/analysis/`: `sector_summary.csv`, `sector_monthly.csv`, `event_outcomes.csv`, `holdout_comparisons.json`, `quality_diagnostics.json`, and `analysis.meta.json`. The metadata records the anomaly-result and feature-source hashes, one- and five-session horizons, fixed baseline thresholds, subgroup minimum size, and creation time. Rebuild these files when anomaly results change. No source CSV, features, model scores, or flags are modified.
+
+Sector aggregates describe **covered stocks only**. The flag rate is flagged model-ready stock-sessions divided by model-ready stock-sessions in that covered sector and filter selection. Mean daily return and historical daily volatility use the same eligible rows; volatility is the sample standard deviation of daily returns. Some sectors have one stock, so their rates should not be read as industry-wide estimates or rankings. Normalized stock charts set each stock's first observed close in the selected view to 100, preserving its own price series and dates.
+
+The event study uses each stock's next **observed trading session** and its fifth subsequent observed session: `next_return = close(T+1) / close(T) - 1` and `next_five_return = close(T+5) / close(T) - 1`; the absolute move is `abs(next_five_return)`. No calendar-day shift or missing-price interpolation is used. Rows lacking a full future window are excluded from five-session comparisons. These later prices are computed in a separate analysis module and never become model inputs. The holdout comparisons report flagged/unflagged and model-only/baseline-overlap groups with counts, mean and median absolute moves, and signed outcome proportions. Stock or sector subgroup comparisons appear only when each side has at least five complete windows. These are descriptive, selected historical samples, not predictive validation, significance tests, or profitability estimates.
+
+Model-only events satisfy neither fixed Task 004 rule (`volume_zscore_prev20 > 3` and `abs(return_zscore_prev20) > 3`) but were flagged by the pooled model's existing boundary. The investigation panel displays the saved joint-feature context without assigning causal importance to any feature. The brief download copies actual observed and, when available, follow-up values into a concise Markdown note; it adds no news claims or investment recommendation. GAS/VHM diagnostics show monthly flag concentrations, price and volume extremes, partition rates, OHLC range, invalid-price and invalid-volume checks, and review candidates. Investigate adjustment conventions and disclosures manually before inferring a cause.
+
 ## Layout
 
 - `src/market_radar/ingestion/`: Vnstock daily data access, validation, and caching
 - `src/market_radar/features/`: offline financial feature calculation and cache loading
-- `src/market_radar/modeling/`: future training and evaluation
-- `src/market_radar/visualization/`: future Streamlit and Plotly presentation
+- `src/market_radar/modeling/`: offline model training, evaluation, and persistence
+- `src/market_radar/analysis/`: separate offline sector and retrospective research calculations
+- `src/market_radar/visualization/`: offline dashboard loading, summaries, Plotly charts, and Streamlit views
+- `app.py`: Streamlit entry point
 - `src/market_radar/config.py`: project-relative paths
-- `data/raw/`, `data/processed/`, `data/features/`: local provider, normalized, and feature datasets, ignored by Git
+- `data/raw/`, `data/processed/`, `data/features/`, `data/anomalies/`, `data/analysis/`: local datasets and results, ignored by Git
 - `artifacts/`: local model outputs, ignored by Git
 - `tests/`: pytest checks
 
@@ -120,8 +189,9 @@ python -c "import pandas as pd; d = pd.read_csv('data/features/market_features.c
 
 1. **Task 001:** package structure, dependency setup, documentation, and smoke test.
 2. **Task 002:** collect and validate historical Vietnamese stock data using Vnstock 5.1.0.
-3. **Task 003 (this task):** engineer financial features from cached OHLCV without future leakage.
-4. Establish statistical baselines; train and evaluate Isolation Forest anomaly detection.
-5. Build the interactive Streamlit dashboard.
+3. **Task 003:** engineer financial features from cached OHLCV without future leakage.
+4. **Task 004:** train pooled Isolation Forest and compare its anomalies with fixed statistical baselines.
+5. **Task 005:** explore saved historical results in the interactive Streamlit dashboard.
+6. **Task 006 (current):** investigate covered-sector patterns and retrospective outcomes without changing the detector.
 
 This project is for research and portfolio demonstration, not investment advice.
